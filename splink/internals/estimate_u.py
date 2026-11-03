@@ -232,27 +232,40 @@ def _accumulate_u_counts_from_chunk_and_check_min_count(
         rhs_chunk_num=rhs_chunk_num,
         rhs_num_chunks=rhs_num_chunks,
     )
+    blocked_pairs_sql, cv_sql = comparison_vector_sqls
 
-    pipeline.enqueue_list_of_sqls(comparison_vector_sqls)
+    # Materialise the blocked-pairs join as a physical table before computing
+    # comparison vectors. Without this, DuckDB inlines the join into the same
+    # query plan as the (expensive, non-early-stopping) CASE expression below,
+    # and the whole thing runs on a single thread because the small sample
+    # table fits in one row group / one join morsel.
+    pipeline.enqueue_sql(blocked_pairs_sql["sql"], blocked_pairs_sql["output_table_name"])
+    pipeline = pipeline.break_lineage(db_api)
+    df_blocked_pairs = pipeline.input_dataframes[0]
 
-    # Add dummy match_probability column required by compute_new_parameters_sql
-    sql = """
-    select *, cast(0.0 as float8) as match_probability
-    from __splink__df_comparison_vectors
-    """
-    pipeline.enqueue_sql(sql, "__splink__df_predict")
-
-    sql = compute_new_parameters_sql(
-        estimate_without_term_frequencies=False,
-        comparisons=[comparison],
-    )
-    pipeline.enqueue_sql(sql, "__splink__m_u_counts")
-
-    df_params = db_api.sql_pipeline_to_splink_dataframe(pipeline)
     try:
-        chunk_counts = df_params.as_record_list()
+        pipeline.enqueue_sql(cv_sql["sql"], cv_sql["output_table_name"])
+
+        # Add dummy match_probability column required by compute_new_parameters_sql
+        sql = """
+        select *, cast(0.0 as float8) as match_probability
+        from __splink__df_comparison_vectors
+        """
+        pipeline.enqueue_sql(sql, "__splink__df_predict")
+
+        sql = compute_new_parameters_sql(
+            estimate_without_term_frequencies=False,
+            comparisons=[comparison],
+        )
+        pipeline.enqueue_sql(sql, "__splink__m_u_counts")
+
+        df_params = db_api.sql_pipeline_to_splink_dataframe(pipeline)
+        try:
+            chunk_counts = df_params.as_record_list()
+        finally:
+            df_params.drop_table_from_database_and_remove_from_cache()
     finally:
-        df_params.drop_table_from_database_and_remove_from_cache()
+        df_blocked_pairs.drop_table_from_database_and_remove_from_cache()
 
     # Drop lambda row: it isn't additive and we don't use it here anyway
     chunk_counts = [
