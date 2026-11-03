@@ -425,6 +425,8 @@ def estimate_u_values(
 
     split_sqls: list[dict[str, str]] = []
 
+    batched_sample_name: str | None = None
+
     if (
         len(linker._input_tables_dict) == 2
         and linker._settings_obj._link_type == "link_only"
@@ -436,6 +438,24 @@ def estimate_u_values(
         )
         input_tablename_sample_l = "__splink__df_concat_sample_left"
         input_tablename_sample_r = "__splink__df_concat_sample_right"
+    elif hasattr(db_api, "duckdb_con"):
+        # The sample is small enough to sit in a single DuckDB row group, so
+        # the self-join below is scheduled as a single morsel and never uses
+        # more than one thread, however expensive the comparison. Re-register
+        # it as many small Arrow batches so DuckDB can schedule the join
+        # across threads on its own, independent of the (small) row count.
+        import pyarrow as pa
+
+        con = db_api.duckdb_con
+        sample_arrow = con.sql(f"select * from {df_sample.physical_name}").to_arrow_table()
+        batches = sample_arrow.combine_chunks().to_batches(max_chunksize=64)
+        batched_sample = pa.Table.from_batches(batches, schema=sample_arrow.schema)
+
+        batched_sample_name = f"__splink__df_concat_sample_batched_{ascii_uid(8)}"
+        con.register(batched_sample_name, batched_sample)
+
+        input_tablename_sample_l = batched_sample_name
+        input_tablename_sample_r = batched_sample_name
 
     # At this point we've computed our data sample and we're ready to 'block and count'
 
@@ -556,5 +576,7 @@ def estimate_u_values(
             )
 
     df_sample.drop_table_from_database_and_remove_from_cache()
+    if batched_sample_name is not None:
+        db_api.duckdb_con.unregister(batched_sample_name)
 
     logger.info("\nEstimated u probabilities using random sampling")
