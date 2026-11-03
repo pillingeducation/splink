@@ -451,7 +451,7 @@ def estimate_u_values(
         batches = sample_arrow.combine_chunks().to_batches(max_chunksize=64)
         batched_sample = pa.Table.from_batches(batches, schema=sample_arrow.schema)
 
-        batched_sample_name = f"__splink__df_concat_sample_batched_{ascii_uid(8)}"
+        batched_sample_name = f"__splink__df_concat_sample_{ascii_uid(8)}"
         con.register(batched_sample_name, batched_sample)
 
         input_tablename_sample_l = batched_sample_name
