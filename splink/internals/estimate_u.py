@@ -265,7 +265,11 @@ def _accumulate_u_counts_from_chunk_and_check_min_count(
         finally:
             df_params.drop_table_from_database_and_remove_from_cache()
     finally:
-        df_blocked_pairs.drop_table_from_database_and_remove_from_cache()
+        # debug_keep_temp_views callers (e.g. tests) expect intermediate
+        # tables such as __splink__blocked_id_pairs to survive for later
+        # introspection; only clean up outside of that mode.
+        if not getattr(db_api, "debug_keep_temp_views", False):
+            df_blocked_pairs.drop_table_from_database_and_remove_from_cache()
 
     # Drop lambda row: it isn't additive and we don't use it here anyway
     chunk_counts = [
