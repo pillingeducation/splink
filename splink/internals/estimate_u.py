@@ -439,11 +439,7 @@ def estimate_u_values(
         input_tablename_sample_l = "__splink__df_concat_sample_left"
         input_tablename_sample_r = "__splink__df_concat_sample_right"
     elif hasattr(db_api, "duckdb_con"):
-        # The sample is small enough to sit in a single DuckDB row group, so
-        # the self-join below is scheduled as a single morsel and never uses
-        # more than one thread, however expensive the comparison. Re-register
-        # it as many small Arrow batches so DuckDB can schedule the join
-        # across threads on its own, independent of the (small) row count.
+        # Re-register as small Arrow batches so the self-join below parallelises across threads.
         import pyarrow as pa
 
         con = db_api.duckdb_con
