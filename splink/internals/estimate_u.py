@@ -234,11 +234,7 @@ def _accumulate_u_counts_from_chunk_and_check_min_count(
     )
     blocked_pairs_sql, cv_sql = comparison_vector_sqls
 
-    # Materialise the blocked-pairs join as a physical table before computing
-    # comparison vectors. Without this, DuckDB inlines the join into the same
-    # query plan as the (expensive, non-early-stopping) CASE expression below,
-    # and the whole thing runs on a single thread because the small sample
-    # table fits in one row group / one join morsel.
+    # Materialise so DuckDB can't inline the join into the single-threaded CV scan below.
     pipeline.enqueue_sql(blocked_pairs_sql["sql"], blocked_pairs_sql["output_table_name"])
     pipeline = pipeline.break_lineage(db_api)
     df_blocked_pairs = pipeline.input_dataframes[0]
@@ -265,9 +261,7 @@ def _accumulate_u_counts_from_chunk_and_check_min_count(
         finally:
             df_params.drop_table_from_database_and_remove_from_cache()
     finally:
-        # debug_keep_temp_views callers (e.g. tests) expect intermediate
-        # tables such as __splink__blocked_id_pairs to survive for later
-        # introspection; only clean up outside of that mode.
+        # tests with debug_keep_temp_views expect this table to survive for introspection
         if not getattr(db_api, "debug_keep_temp_views", False):
             df_blocked_pairs.drop_table_from_database_and_remove_from_cache()
 
